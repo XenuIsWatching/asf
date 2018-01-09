@@ -3,7 +3,7 @@
  *
  * \brief USB Android Open Accessory protocol definitions.
  *
- * Copyright (C) 2014-2015 Atmel Corporation. All rights reserved.
+ * Copyright (C) 2014-2017 Atmel Corporation. All rights reserved.
  *
  * \asf_license_start
  *
@@ -59,18 +59,31 @@
  */
 /** Get AOA Protocol version */
 #define USB_REQ_AOA_GET_PROTOCOL      0x33
-/** Sending identifying str info */
+/** Sending identifying string info */
 #define USB_REQ_AOA_SEND_IDENT_STRING 0x34
 /** Start the Android Device in acc mode */
 #define USB_REQ_AOA_STARTUP           0x35
 
+/** Register a HID device */
+#define USB_REQ_AOA_REGISTER_HID      54
+/** Unregister a HID device */
+#define USB_REQ_AOA_UNREGISTER_HID    55
+/** Sending the HID report descriptor */
+#define USB_REQ_AOA_SET_HID_RPT_DESC  56
+/** Sending HID events */
+#define USB_REQ_AOA_SEND_HID_EVENT    57
+
 /** Google Vendor ID */
-#define GOOGLE_VID              0x18D1
+#define GOOGLE_VID                  0x18D1
 /** Google Product ID which indicates it supports Android Accessory Device */
-#define AOA_PID                 0x2D00
+#define AOA_ACCESSORY_PID           0x2D00
 /** Google Product ID which indicates it supports
  * Android Accessory Device which supports ADB */
-#define AOA_ADB_PID             0x2D01
+#define AOA_ACCESSORY_ADB_PID       0x2D01
+#define AOA_AUDIO_PID               0x0202
+#define AOA_AUDIO_ADB_PID           0x0203
+#define AOA_ACCESSORY_AUDIO_PID     0x0204
+#define AOA_ACCESSORY_AUDIO_ADB_PID 0x0205
 
 /** Index of manufacturer */
 #define AOA_STRING_INDEX_MANUFACTURER  0

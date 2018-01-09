@@ -141,6 +141,93 @@ extern void udc_start(void);
 # define UHC_VBUS_ERROR()
 #endif
 
+#ifdef UHD_PIPE_DMA_SUPPORTED
+// for DCache
+/**
+ * \brief Flush content in DCache to physical memory
+ * \param addr The memory address to flush
+ * \param dsize The size of the memory
+ */
+static inline void _dcache_flush(void *addr, uint32_t dsize)
+{
+#ifdef CONF_BOARD_ENABLE_CACHE_AT_INIT
+	int32_t op_size = dsize;
+	uint32_t op_addr = (uint32_t) addr;
+	int32_t linesize = 32U;                // in Cortex-M7 size of cache line is fixed to 8 words (32 bytes)
+	if (op_addr & 0x1F) {
+		op_size += op_addr & 0x1F;
+		op_addr &= ~0x1F;
+	}
+	__ISB();
+	__DSB();
+
+	while (op_size > 0) {
+		SCB->DCCMVAC = op_addr;
+		op_addr += linesize;
+		op_size -= linesize;
+	}
+
+	__DSB();
+	__ISB();
+#endif
+}
+
+/**
+ * \brief Preparation for unaligned buffer invalidation
+ * \param addr The memory address to invalidate
+ * \param dsize The size of the memory
+ */
+static void _dcache_invalidate_prepare(void *addr, uint32_t dsize)
+{
+#ifdef CONF_BOARD_ENABLE_CACHE_AT_INIT
+	int32_t op_size = dsize;
+	uint32_t op_addr = (uint32_t) addr;
+	uint32_t addr1 = op_addr;
+	uint32_t addr2 = op_addr + op_size;
+	if (addr1 & 0x1F || addr2 & 0x1F) {
+		addr1 &= ~0x1F;
+		addr2 &= ~0x1F;
+		__ISB();
+		__DSB();
+		SCB->DCCIMVAC = addr1;
+		SCB->DCCIMVAC = addr2;
+		__DSB();
+		__ISB();
+	}
+#endif
+}
+
+/**
+ * \brief Invalidate DCache of physical memory
+ * \param addr The memory address to invalidate
+ * \param dsize The size of the memory
+ */
+static void _dcache_invalidate(void *addr, uint32_t dsize)
+{
+#ifdef CONF_BOARD_ENABLE_CACHE_AT_INIT
+	int32_t op_size = dsize;
+	uint32_t op_addr = (uint32_t)addr;
+	int32_t linesize = 32U;                // in Cortex-M7 size of cache line is fixed to 8 words (32 bytes)
+	if (op_addr & 0x1F) {
+		op_size += op_addr & 0x1F;
+		op_addr &= ~0x1F;
+	}
+	__ISB();
+	__DSB();
+
+	while (op_size > 0) {
+		/* D-Cache Invalidate by MVA to PoC */
+		(*(volatile uint32_t *)(0xE000EF5C)) = op_addr;
+		op_addr += linesize;
+		op_size -= linesize;
+	}
+
+	__DSB();
+	__ISB();
+#endif
+}
+#endif
+
 /**
  * \ingroup usb_host_group
  * \defgroup uhd_group USB Host Driver (UHD)
@@ -899,9 +986,6 @@ void uhd_ep_free(usb_add_t add, usb_ep_t endp)
 				continue; // Mismatch
 			}
 		}
-		// Unalloc pipe
-		uhd_disable_pipe(pipe);
-		uhd_unallocate_memory(pipe);
 
 		// Stop transfer on this pipe
 #ifndef USB_HOST_HUB_SUPPORT
@@ -1029,6 +1113,13 @@ bool uhd_ep_run(usb_add_t add,
 
 #ifdef UHD_PIPE_DMA_SUPPORTED
 	// Request first transfer
+	if (buf && buf_size) {
+		if (Is_uhd_pipe_out(pipe)) {
+			_dcache_flush(buf, buf_size);
+		} else {
+			_dcache_invalidate_prepare(buf, buf_size);
+		}
+	}
 	uhd_pipe_trans_complet(pipe);
 #endif
 	return true;
@@ -1256,8 +1347,10 @@ static void uhd_ctrl_timeout(void)
 	if (uhd_ctrl_request_timeout) {
 		// Setup request on-going
 		if (--uhd_ctrl_request_timeout == 0) {
-			// Stop request
-			uhd_freeze_pipe(0);
+			// Stop request (freezing pipe and reset FIFO)
+			uhd_reset_pipe(0);
+			uhd_enable_stall_interrupt(0);
+			uhd_enable_pipe_error_interrupt(0);
 			uhd_ctrl_request_end(UHD_TRANS_TIMEOUT);
 		}
 	}
@@ -1336,6 +1429,9 @@ static void uhd_sof_interrupt(void)
  */
 static void uhd_ctrl_interrupt(void)
 {
+	bool rxen = Is_uhd_in_received_interrupt_enabled(0);
+	bool txen = Is_uhd_out_ready_interrupt_enabled(0);
+
 	// A setup request is on-going
 	Assert(uhd_ctrl_request_timeout!=0);
 
@@ -1365,7 +1461,7 @@ static void uhd_ctrl_interrupt(void)
 		}
 		return;
 	}
-	if (Is_uhd_in_received(0)) {
+	if (Is_uhd_in_received(0) && rxen) {
 		// In case of low USB speed and with a high CPU frequency,
 		// a ACK from host can be always running on USB line
 		// then wait end of ACK on IN pipe.
@@ -1386,7 +1482,7 @@ static void uhd_ctrl_interrupt(void)
 		}
 		return;
 	}
-	if (Is_uhd_out_ready(0)) {
+	if (Is_uhd_out_ready(0) && txen) {
 		// OUT packet sent
 		uhd_freeze_pipe(0);
 		uhd_ack_out_ready(0);
@@ -1406,6 +1502,10 @@ static void uhd_ctrl_interrupt(void)
 	if (Is_uhd_stall(0)) {
 		// Stall Handshake received
 		uhd_ack_stall(0);
+		// Reset FIFO
+		uhd_reset_pipe(0);
+		uhd_enable_stall_interrupt(0);
+		uhd_enable_pipe_error_interrupt(0);
 		uhd_ctrl_request_end(UHD_TRANS_STALL);
 		return;
 	}
@@ -1465,6 +1565,8 @@ static void uhd_ctrl_phase_setup(void)
 
 	uhd_ctrl_request_timeout = 5000;
 	uhd_enable_setup_ready_interrupt(0);
+	__DSB();
+	__ISB();
 	uhd_ack_fifocon(0);
 	uhd_unfreeze_pipe(0);
 }
@@ -1514,6 +1616,8 @@ uhd_ctrl_receiv_in_read_data:
 		uhd_ctrl_request_first->payload_size--;
 		nb_byte_received--;
 	}
+	__DSB();
+	__ISB();
 
 	if (!uhd_ctrl_request_first->payload_size && nb_byte_received) {
 		// payload buffer is full to store data remaining
@@ -1608,6 +1712,8 @@ static void uhd_ctrl_phase_data_out(void)
 		uhd_ctrl_request_first->payload_size--;
 	}
 	uhd_enable_out_ready_interrupt(0);
+	__DSB();
+	__ISB();
 	uhd_ack_fifocon(0);
 	uhd_unfreeze_pipe(0);
 }
@@ -1758,6 +1864,8 @@ static void uhd_pipe_in_received(uint8_t pipe)
 		for (i = 0; i < nb_data; i++) {
 			*ptr_dst++ = *ptr_src++;
 		}
+		__DSB();
+		__ISB();
 	}
 	// Clear FIFO Status
 	uhd_ack_fifocon(pipe);
@@ -1806,6 +1914,8 @@ static void uhd_pipe_out_ready(uint8_t pipe)
 		for (i = 0; i < nb_data; i++) {
 			*ptr_dst++ = *ptr_src++;
 		}
+		__DSB();
+		__ISB();
 	}
 	// Switch to next bank
 	uhd_ack_fifocon(pipe);
@@ -1937,6 +2047,8 @@ static void uhd_pipe_trans_complet(uint8_t pipe)
 			uhd_enable_out_ready_interrupt(pipe);
 			return;
 		}
+	} else {
+		_dcache_invalidate(ptr_job->buf, ptr_job->nb_trans);
 	}
 	// Call callback to signal end of transfer
 	uhd_pipe_finish_job(pipe, UHD_TRANS_NOERROR);
@@ -1952,14 +2064,13 @@ static void uhd_pipe_interrupt_dma(uint8_t pipe)
 {
 	uhd_pipe_job_t *ptr_job;
 	uint32_t nb_remaining;
+	uint32_t stat = uhd_pipe_dma_get_status(pipe);
 
-	if (uhd_pipe_dma_get_status(pipe)
-			& USBHS_HSTDMASTATUS_CHANN_ENB) {
+	if (stat & USBHS_HSTDMASTATUS_CHANN_ENB) {
 		return; // Ignore EOT_STA interrupt
 	}
 	// Save number of data no transfered
-	nb_remaining = (uhd_pipe_dma_get_status(pipe) &
-			USBHS_HSTDMASTATUS_BUFF_COUNT_Msk)
+	nb_remaining = (stat & USBHS_HSTDMASTATUS_BUFF_COUNT_Msk)
 			>> USBHS_HSTDMASTATUS_BUFF_COUNT_Pos;
 
 	// Get job corresponding at endpoint
@@ -2110,6 +2221,15 @@ static void uhd_pipe_interrupt(uint8_t pipe)
 static void uhd_ep_abort_pipe(uint8_t pipe, uhd_trans_status_t status)
 {
 	// Stop transfer
+#ifdef UHD_PIPE_DMA_SUPPORTED
+	if (Is_uhd_pipe_dma_supported(pipe)) {
+		uhd_pipe_job_t *ptr_job = &uhd_pipe_job[pipe - 1];
+		uhd_freeze_pipe(pipe);
+		ptr_job->nb_trans =
+				uhd_pipe_dma_get_addr(pipe) - (uint32_t)ptr_job->buf;
+		uhd_pipe_dma_set_control(pipe, 0);
+	}
+#endif
 	uhd_reset_pipe(pipe);
 
 	// Autoswitch bank and interrupts has been reseted, then re-enable it
@@ -2117,11 +2237,7 @@ static void uhd_ep_abort_pipe(uint8_t pipe, uhd_trans_status_t status)
 	uhd_enable_stall_interrupt(pipe);
 	uhd_enable_pipe_error_interrupt(pipe);
 	uhd_disable_out_ready_interrupt(pipe);
-#ifdef UHD_PIPE_DMA_SUPPORTED
-	if (Is_uhd_pipe_dma_supported(pipe)) {
-		uhd_pipe_dma_set_control(pipe, 0);
-	}
-#endif
+
 	uhd_pipe_finish_job(pipe, status);
 }
 
@@ -2135,6 +2251,14 @@ static void uhd_ep_abort_pipe(uint8_t pipe, uhd_trans_status_t status)
 static void uhd_pipe_finish_job(uint8_t pipe, uhd_trans_status_t status)
 {
 	uhd_pipe_job_t *ptr_job;
+	uint32_t dev_addr = uhd_get_configured_address(pipe);
+	uint32_t dev_ep = uhd_get_pipe_endpoint_address(pipe);
+
+	if (status == UHD_TRANS_DISCONNECT) {
+		// Unalloc pipe
+		uhd_disable_pipe(pipe);
+		uhd_unallocate_memory(pipe);
+	}
 
 	// Get job corresponding at endpoint
 	ptr_job = &uhd_pipe_job[pipe - 1];
@@ -2145,8 +2269,6 @@ static void uhd_pipe_finish_job(uint8_t pipe, uhd_trans_status_t status)
 	if (NULL == ptr_job->call_end) {
 		return; // No callback linked to job
 	}
-	uint32_t dev_addr = uhd_get_configured_address(pipe);
-	uint32_t dev_ep = uhd_get_pipe_endpoint_address(pipe);
 	ptr_job->call_end(dev_addr, dev_ep, status, ptr_job->nb_trans);
 }
 

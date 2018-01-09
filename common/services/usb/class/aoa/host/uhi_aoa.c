@@ -3,7 +3,7 @@
  *
  * \brief Android Open Accessory
  *
- * Copyright (C) 2014-2015 Atmel Corporation. All rights reserved.
+ * Copyright (C) 2014-2017 Atmel Corporation. All rights reserved.
  *
  * \asf_license_start
  *
@@ -47,12 +47,15 @@
 #include "usb_protocol_aoa.h"
 #include "uhd.h"
 #include "uhc.h"
-#include "conf_aoa.h"
 #include "uhi_aoa.h"
 #include <string.h>
 
 #ifdef USB_HOST_HUB_SUPPORT
 #   error USB HUB support is not implemented on UHI Android Open Accessory
+#endif
+
+#ifndef AOA_V2_SUPPORT
+#   define AOA_V2_SUPPORT 0
 #endif
 
 /**
@@ -105,9 +108,18 @@ void uhi_aoa_mode_enable_complete(usb_add_t, uhd_trans_status_t, uint16_t);
 /** Stores relevant information about the USB connection */
 struct uhi_aoa_dev_t {
 	uhc_device_t *dev;
+#if AOA_V2_SUPPORT
+	uint16_t protocol;
+#endif
 	usb_ep_t ep_in;
 	usb_ep_t ep_out;
 };
+
+/** \brief Function to end AoA enabling success
+ *  - Called when the process of trying to enable the device in Accessory Mode
+ *    with success.
+ */
+static void uhi_aoa_enable_success(void);
 
 /** Current USB device AOA selected by the UHI AOA */
 #ifdef USB_HOST_HUB_SUPPORT
@@ -169,9 +181,13 @@ uhc_enum_status_t uhi_aoa_install(uhc_device_t *dev)
 	}
 
 	if ((dev->dev_desc.idVendor == le16_to_cpu(GOOGLE_VID)) &&
-			((dev->dev_desc.idProduct == le16_to_cpu(AOA_PID)) &&
-			(dev->dev_desc.idProduct ==
-			le16_to_cpu(AOA_ADB_PID)))) {
+			((dev->dev_desc.idProduct == le16_to_cpu(AOA_ACCESSORY_PID)) ||
+			 (dev->dev_desc.idProduct == le16_to_cpu(AOA_ACCESSORY_ADB_PID))
+#if AOA_V2_SUPPORT
+			 || (dev->dev_desc.idProduct == le16_to_cpu(AOA_ACCESSORY_AUDIO_PID))
+			 || (dev->dev_desc.idProduct == le16_to_cpu(AOA_ACCESSORY_AUDIO_ADB_PID))
+#endif
+			 )) {
 		/* Device is in AOA mode */
 		uhi_aoa_dev.dev = dev;
 		uhi_aoa_enable_stage = AOA_ENABLE_STAGE_SUCCESSFUL;
@@ -255,12 +271,11 @@ void uhi_aoa_enable(uhc_device_t *dev)
 		return; /* No interface to enable */
 	}
 
-	if (uhi_aoa_enable_stage == AOA_ENABLE_STAGE_PROCESSING) {
+	if (uhi_aoa_enable_stage == AOA_ENABLE_STAGE_SUCCESSFUL) {
+		uhi_aoa_enable_success();
+	} else if (uhi_aoa_enable_stage == AOA_ENABLE_STAGE_PROCESSING) {
 		uhi_aoa_mode_enable_step1(dev);
 	}
-
-	/* Init value */
-	UHI_AOA_CHANGE(dev, true);
 }
 
 void uhi_aoa_uninstall(uhc_device_t *dev)
@@ -272,6 +287,9 @@ void uhi_aoa_uninstall(uhc_device_t *dev)
 	uhi_aoa_dev.dev = NULL;
 	uhi_aoa_dev.ep_in = 0x00;
 	uhi_aoa_dev.ep_out = 0x00;
+#if AOA_V2_SUPPORT
+	uhi_aoa_dev.protocol = 0;
+#endif
 	UHI_AOA_CHANGE(dev, false);
 }
 
@@ -362,9 +380,20 @@ void uhi_aoa_mode_enable_complete(
 	(void)payload_trans;
 	if (status == UHD_TRANS_NOERROR) {
 		uhi_aoa_enable_stage = AOA_ENABLE_STAGE_SUCCESSFUL;
+		uhi_aoa_enable_success();
 	} else {
 		uhi_aoa_enable_stage = AOA_ENABLE_STAGE_FAILED;
 	}
+}
+
+static void uhi_aoa_enable_success(void)
+{
+#if AOA_V2_SUPPORT
+	uhi_aoa_dev_sel->protocol = uhi_aoa_protocol;
+#endif
+
+	/* Notify AoA change */
+	UHI_AOA_CHANGE(uhi_aoa_dev_sel->dev, true);
 }
 
 void uhi_aoa_send_info_string(uint8_t pindex, char *pinfo,
@@ -393,7 +422,90 @@ bool uhi_aoa_write(uint8_t *payload, uint16_t payload_size,
 		uhd_callback_trans_t callback_end)
 {
 	return uhd_ep_run(uhi_aoa_dev_sel->dev->address, uhi_aoa_dev.ep_out,
-			false, payload, payload_size, 100, callback_end);
+			!payload_size, payload, payload_size, 100, callback_end);
+}
+
+
+bool uhi_aoa_register_hid(uint16_t id, uint8_t *rpt_desc, uint16_t desc_len)
+{
+#if AOA_V2_SUPPORT
+	usb_setup_req_t req;
+	uint16_t off, pkt_siz;
+	if (uhi_aoa_enable_stage != AOA_ENABLE_STAGE_SUCCESSFUL) {
+		return false;
+	}
+	if (uhi_aoa_dev_sel->protocol < 2) {
+		return false;
+	}
+	req.bmRequestType = USB_REQ_RECIP_DEVICE | USB_REQ_TYPE_VENDOR |
+			USB_REQ_DIR_OUT;
+	req.bRequest = (uint8_t)USB_REQ_AOA_REGISTER_HID;
+	req.wValue = cpu_to_le16(id);
+	req.wIndex = cpu_to_le16(desc_len);
+	req.wLength = 0;
+	if (!uhd_setup_request(uhi_aoa_dev_sel->dev->address, &req, NULL, 0,
+			NULL, NULL)) {
+		return false;
+	}
+	req.bRequest = (uint8_t)USB_REQ_AOA_SET_HID_RPT_DESC;
+	for (off = 0; off < desc_len; ) {
+		pkt_siz = desc_len - off;
+		if (pkt_siz > uhi_aoa_dev_sel->dev->dev_desc.bMaxPacketSize0) {
+			pkt_siz = uhi_aoa_dev_sel->dev->dev_desc.bMaxPacketSize0;
+		}
+		req.wIndex = cpu_to_le16(off);
+		req.wLength = cpu_to_le16(pkt_siz);
+		if (!uhd_setup_request(uhi_aoa_dev_sel->dev->address, &req,
+				&rpt_desc[off], pkt_siz, NULL, NULL)) {
+			return false;
+		}
+		off += pkt_siz;
+	}
+	return true;
+#else
+	return false;
+#endif
+}
+
+bool uhi_aoa_unregister_hid(uint16_t id)
+{
+#if AOA_V2_SUPPORT
+	usb_setup_req_t req;
+	if (uhi_aoa_dev_sel->protocol < 2) {
+		return false;
+	}
+	req.bmRequestType = USB_REQ_RECIP_DEVICE | USB_REQ_TYPE_VENDOR |
+			USB_REQ_DIR_OUT;
+	req.bRequest = (uint8_t)USB_REQ_AOA_UNREGISTER_HID;
+	req.wValue = cpu_to_le16(id);
+	req.wIndex = 0;
+	req.wLength = 0;
+	return uhd_setup_request(uhi_aoa_dev_sel->dev->address, &req, NULL, 0,
+			NULL, NULL);
+#else
+	return false;
+#endif
+}
+
+bool uhi_aoa_send_hid_event(uint16_t id, void *hid_rpt, uint16_t rpt_size)
+{
+#if AOA_V2_SUPPORT
+	usb_setup_req_t req;
+	if (uhi_aoa_dev_sel->protocol < 2) {
+		return false;
+	}
+	req.bmRequestType = USB_REQ_RECIP_DEVICE | USB_REQ_TYPE_VENDOR |
+			USB_REQ_DIR_OUT;
+	req.bRequest = (uint8_t)USB_REQ_AOA_SEND_HID_EVENT;
+	req.wValue = cpu_to_le16(id);
+	req.wIndex = 0;
+	req.wLength = cpu_to_le16(rpt_size);
+	return uhd_setup_request(uhi_aoa_dev_sel->dev->address, &req,
+			(uint8_t *)hid_rpt, rpt_size,
+			NULL, NULL);
+#else
+	return false;
+#endif
 }
 
 /** @} */

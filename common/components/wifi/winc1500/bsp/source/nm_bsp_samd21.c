@@ -40,6 +40,7 @@
  */
 
 #include "bsp/include/nm_bsp.h"
+#include "bsp/include/nm_bsp_internal.h"
 #include "common/include/nm_common.h"
 #include "asf.h"
 #include "conf_winc.h"
@@ -89,9 +90,6 @@ sint8 nm_bsp_init(void)
 	    delay_init();
     }
 
-	/* Perform chip reset. */
-	nm_bsp_reset();
-
 	system_interrupt_enable_global();
 
 	return M2M_SUCCESS;
@@ -124,11 +122,10 @@ void nm_bsp_reset(void)
 {
 	port_pin_set_output_level(CONF_WINC_PIN_CHIP_ENABLE, false);
 	port_pin_set_output_level(CONF_WINC_PIN_RESET, false);
-	nm_bsp_sleep(100);
+	nm_bsp_sleep(1);
 	port_pin_set_output_level(CONF_WINC_PIN_CHIP_ENABLE, true);
-	nm_bsp_sleep(100);
+	nm_bsp_sleep(10);
 	port_pin_set_output_level(CONF_WINC_PIN_RESET, true);
-	nm_bsp_sleep(100);
 }
 
 /*

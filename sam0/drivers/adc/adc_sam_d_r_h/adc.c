@@ -3,7 +3,7 @@
  *
  * \brief SAM Peripheral Analog-to-Digital Converter Driver
  *
- * Copyright (C) 2012-2016 Atmel Corporation. All rights reserved.
+ * Copyright (C) 2012-2017 Atmel Corporation. All rights reserved.
  *
  * \asf_license_start
  *
@@ -273,8 +273,7 @@ static inline void _adc_configure_ain_pin(uint32_t pin)
 			PIN_INVALID_ADC_AIN, PIN_INVALID_ADC_AIN,
 			PIN_INVALID_ADC_AIN, PIN_INVALID_ADC_AIN,
 			PIN_INVALID_ADC_AIN, PIN_INVALID_ADC_AIN,
-#elif SAM_PART_IS_DEFINED(SAMHA1G14A) || SAM_PART_IS_DEFINED(SAMHA1G15A) || \
-		SAM_PART_IS_DEFINED(SAMHA1G16A)
+#elif (SAMHA1G)
 			PIN_PA02B_ADC_AIN0,  PIN_PA03B_ADC_AIN1,
 			PIN_INVALID_ADC_AIN, PIN_INVALID_ADC_AIN,
 			PIN_PA04B_ADC_AIN4,  PIN_PA05B_ADC_AIN5,
