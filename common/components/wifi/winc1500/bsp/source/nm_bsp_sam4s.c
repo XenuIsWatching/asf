@@ -4,7 +4,7 @@
  *
  * \brief This module contains SAM4S BSP APIs implementation.
  *
- * Copyright (c) 2016 Atmel Corporation. All rights reserved.
+ * Copyright (c) 2016-2017 Atmel Corporation. All rights reserved.
  *
  * \asf_license_start
  *
@@ -55,6 +55,23 @@ static void chip_isr(uint32_t id, uint32_t mask)
 	}
 }
 
+/**
+ *	@fn		nm_bsp_reset
+ *	@brief	Reset NMC1500 SoC by setting CHIP_EN and RESET_N signals low,
+ *           CHIP_EN high then RESET_N high
+ */
+void nm_bsp_reset(void)
+{
+	pio_set_pin_low(CONF_WINC_PIN_CHIP_ENABLE);
+	pio_set_pin_low(CONF_WINC_PIN_RESET);
+	nm_bsp_sleep(100);
+	pio_set_pin_high(CONF_WINC_PIN_CHIP_ENABLE);
+	nm_bsp_sleep(100);
+	pio_set_pin_high(CONF_WINC_PIN_RESET);
+	nm_bsp_sleep(100);
+}
+
+
 /*
  *	@fn		init_chip_pins
  *	@brief	Initialize reset, chip enable and wake pin
@@ -98,19 +115,15 @@ sint8 nm_bsp_init(void)
 }
 
 /**
- *	@fn		nm_bsp_reset
- *	@brief	Reset NMC1500 SoC by setting CHIP_EN and RESET_N signals low,
- *           CHIP_EN high then RESET_N high
- */
-void nm_bsp_reset(void)
+*   @fn      nm_bsp_deinit
+*   @brief   De-iInitialize BSP
+*   @return  0 in case of success and -1 in case of failure
+*/
+sint8 nm_bsp_deinit(void)
 {
 	pio_set_pin_low(CONF_WINC_PIN_CHIP_ENABLE);
 	pio_set_pin_low(CONF_WINC_PIN_RESET);
-	nm_bsp_sleep(100);
-	pio_set_pin_high(CONF_WINC_PIN_CHIP_ENABLE);
-	nm_bsp_sleep(10);
-	pio_set_pin_high(CONF_WINC_PIN_RESET);
-	nm_bsp_sleep(10);
+	return M2M_SUCCESS;
 }
 
 /*
@@ -142,6 +155,7 @@ void nm_bsp_register_isr(tpfNmBspIsr pfIsr)
 	pio_pull_up(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK, PIO_PULLUP);
 //	pio_set_debounce_filter(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK, 10);
 	pio_handler_set_pin(CONF_WINC_SPI_INT_PIN, PIO_IT_LOW_LEVEL, chip_isr);
+	pio_get_interrupt_status(CONF_WINC_SPI_INT_PIO);
 	pio_enable_interrupt(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK);
 	pio_handler_set_priority(CONF_WINC_SPI_INT_PIO, (IRQn_Type)CONF_WINC_SPI_INT_PIO_ID,
 			CONF_WINC_SPI_INT_PRIORITY);
@@ -156,6 +170,7 @@ void nm_bsp_register_isr(tpfNmBspIsr pfIsr)
 void nm_bsp_interrupt_ctrl(uint8 u8Enable)
 {
 	if (u8Enable) {
+		pio_get_interrupt_status(CONF_WINC_SPI_INT_PIO);
 		pio_enable_interrupt(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK);
 	}
 	else {

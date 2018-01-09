@@ -4,7 +4,7 @@
  *
  * \brief This module contains SAMG55 BSP APIs implementation.
  *
- * Copyright (c) 2016 Atmel Corporation. All rights reserved.
+ * Copyright (c) 2016-2017 Atmel Corporation. All rights reserved.
  *
  * \asf_license_start
  *
@@ -66,8 +66,6 @@ static void init_chip_pins(void)
 	ioport_set_pin_level(CONF_WINC_PIN_RESET, IOPORT_PIN_LEVEL_HIGH);
 	ioport_set_pin_dir(CONF_WINC_PIN_CHIP_ENABLE, IOPORT_DIR_OUTPUT);
 	ioport_set_pin_level(CONF_WINC_PIN_CHIP_ENABLE, IOPORT_PIN_LEVEL_HIGH);
-	ioport_set_pin_dir(CONF_WINC_PIN_WAKE, IOPORT_DIR_OUTPUT);
-	ioport_set_pin_level(CONF_WINC_PIN_WAKE, IOPORT_PIN_LEVEL_HIGH);
 }
 
 /*
@@ -91,6 +89,18 @@ sint8 nm_bsp_init(void)
 	nm_bsp_reset();
 
 	return 0;
+}
+
+/**
+*   @fn      nm_bsp_deinit
+*   @brief   De-iInitialize BSP
+*   @return  0 in case of success and -1 in case of failure
+*/
+sint8 nm_bsp_deinit(void)
+{
+	ioport_set_pin_level(CONF_WINC_PIN_CHIP_ENABLE, false);
+	ioport_set_pin_level(CONF_WINC_PIN_RESET, false);
+	return M2M_SUCCESS;
 }
 
 /**
@@ -139,6 +149,7 @@ void nm_bsp_register_isr(tpfNmBspIsr pfIsr)
 	/*Interrupt on falling edge*/
 	pio_handler_set(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_PIO_ID,
 	CONF_WINC_SPI_INT_MASK, PIO_PULLUP | PIO_IT_FALL_EDGE, chip_isr);
+	pio_get_interrupt_status(CONF_WINC_SPI_INT_PIO);
 	pio_enable_interrupt(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK);
 	NVIC_EnableIRQ((IRQn_Type) CONF_WINC_SPI_INT_PIO_ID);
 	pio_handler_set_priority(CONF_WINC_SPI_INT_PIO, (IRQn_Type)CONF_WINC_SPI_INT_PIO_ID,
@@ -154,6 +165,7 @@ void nm_bsp_register_isr(tpfNmBspIsr pfIsr)
 void nm_bsp_interrupt_ctrl(uint8 u8Enable)
 {
 	if (u8Enable) {
+		pio_get_interrupt_status(CONF_WINC_SPI_INT_PIO);
 		pio_enable_interrupt(CONF_WINC_SPI_INT_PIO, CONF_WINC_SPI_INT_MASK);
 	}
 	else {
